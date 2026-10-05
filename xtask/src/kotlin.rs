@@ -13,16 +13,18 @@ struct PackageValues {
 }
 
 #[derive(ValueEnum, Clone)]
-enum Package {
+enum PackagePreset {
     CryptoSDK,
     FullSDK,
 }
 
-impl Package {
+impl PackagePreset {
     fn values(self) -> PackageValues {
         match self {
-            Package::CryptoSDK => PackageValues { name: "matrix-sdk-crypto-ffi", features: "" },
-            Package::FullSDK => PackageValues { name: "matrix-sdk-ffi", features: "sentry" },
+            PackagePreset::CryptoSDK => {
+                PackageValues { name: "matrix-sdk-crypto-ffi", features: "" }
+            }
+            PackagePreset::FullSDK => PackageValues { name: "matrix-sdk-ffi", features: "sentry" },
         }
     }
 }
@@ -38,7 +40,16 @@ enum KotlinCommand {
     /// Builds the SDK for Android as an AAR.
     BuildAndroidLibrary {
         #[clap(value_enum, long)]
-        package: Package,
+        /// One of the selected presets
+        preset: Option<PackagePreset>,
+
+        #[clap(long)]
+        /// The package name to build
+        package: Option<String>,
+
+        #[clap(long)]
+        /// The features to enable
+        features: Option<String>,
 
         /// Build with the release profile
         #[clap(long)]
@@ -69,10 +80,21 @@ impl KotlinArgs {
                 profile,
                 src_dir,
                 only_target,
+                preset,
                 package,
+                features,
             } => {
                 let profile = profile.as_deref().unwrap_or(if release { "release" } else { "dev" });
-                build_android_library(profile, only_target, &src_dir, package)
+                let (package_name, features) = if let Some(preset) = preset {
+                    let v = preset.values();
+                    (v.name.to_owned(), v.features.to_owned())
+                } else {
+                    (
+                        package.expect("preset or package must be provided"),
+                        features.unwrap_or_default(),
+                    )
+                };
+                build_android_library(profile, only_target, &src_dir, package_name, features)
             }
         }
     }
@@ -82,12 +104,9 @@ fn build_android_library(
     profile: &str,
     only_target: Option<String>,
     src_dir: &Utf8Path,
-    package: Package,
+    package_name: String,
+    features: String,
 ) -> Result<()> {
-    let package_values = package.values();
-    let package_name = package_values.name;
-    let package_features = package_values.features;
-
     let jni_libs_dir = src_dir.join("jniLibs");
     let jni_libs_dir_str = jni_libs_dir.as_str();
 
@@ -100,8 +119,8 @@ fn build_android_library(
             target.as_str(),
             profile,
             jni_libs_dir_str,
-            package_name,
-            package_features,
+            package_name.as_str(),
+            features.as_str(),
         )?
     } else {
         println!("-- Building for x86_64-linux-android[1/4]");
@@ -109,32 +128,32 @@ fn build_android_library(
             "x86_64-linux-android",
             profile,
             jni_libs_dir_str,
-            package_name,
-            package_features,
+            package_name.as_str(),
+            features.as_str(),
         )?;
         println!("-- Building for aarch64-linux-android[2/4]");
         build_for_android_target(
             "aarch64-linux-android",
             profile,
             jni_libs_dir_str,
-            package_name,
-            package_features,
+            package_name.as_str(),
+            features.as_str(),
         )?;
         println!("-- Building for armv7-linux-androideabi[3/4]");
         build_for_android_target(
             "armv7-linux-androideabi",
             profile,
             jni_libs_dir_str,
-            package_name,
-            package_features,
+            package_name.as_str(),
+            features.as_str(),
         )?;
         println!("-- Building for i686-linux-android[4/4]");
         build_for_android_target(
             "i686-linux-android",
             profile,
             jni_libs_dir_str,
-            package_name,
-            package_features,
+            package_name.as_str(),
+            features.as_str(),
         )?
     };
 
