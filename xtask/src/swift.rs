@@ -156,11 +156,22 @@ impl Platform {
         }
     }
 }
-/// The base name of the FFI library.
-const FFI_LIBRARY_NAME: &str = "libmatrix_sdk_ffi.a";
 
-/// The features enabled for the FFI library.
-const FFI_FEATURES: &str = "sentry";
+fn ffi_library_name() -> String {
+    let ffi_crate_cleaned = workspace::xtask_metadata()
+        .expect("parsing workspace.metadata.xtask in Cargo.toml failed")
+        .ffi_crate
+        .unwrap_or_else(|| "matrix-sdk-ffi".to_string())
+        .replace("-", "_");
+    format!("lib{ffi_crate_cleaned}.a")
+}
+
+fn ffi_features() -> String {
+    workspace::xtask_metadata()
+        .expect("parsing workspace.metadata.xtask in Cargo.toml failed")
+        .swift_features
+        .unwrap_or_else(|| "sentry".to_string())
+}
 
 /// The list of targets supported by the SDK.
 const TARGETS: &[Target] = &[
@@ -222,22 +233,26 @@ const TARGETS: &[Target] = &[
 
 fn build_library() -> Result<()> {
     println!("Running debug library build.");
+    let ffi_library_name = ffi_library_name();
+    let ffi_features = ffi_features();
+    let ffi_crate =
+        workspace::xtask_metadata()?.ffi_crate.unwrap_or_else(|| "matrix_sdk_ffi".to_string());
 
     let root_directory = workspace::root_path()?;
     let target_directory = workspace::target_path()?;
-    let ffi_directory = root_directory.join("bindings/apple/generated/matrix_sdk_ffi");
+    let ffi_directory = root_directory.join(format!("bindings/apple/generated/{ffi_crate}"));
     let lib_output_dir = target_directory.join("debug");
 
     create_dir_all(ffi_directory.as_path())?;
 
     let sh = sh();
-    cmd!(sh, "rustup run stable cargo build -p matrix-sdk-ffi --features {FFI_FEATURES}").run()?;
+    cmd!(sh, "rustup run stable cargo build -p matrix-sdk-ffi --features {ffi_features}").run()?;
 
-    rename(lib_output_dir.join(FFI_LIBRARY_NAME), ffi_directory.join(FFI_LIBRARY_NAME))?;
+    rename(lib_output_dir.join(&ffi_library_name), ffi_directory.join(&ffi_library_name))?;
     let swift_directory = root_directory.join("bindings/apple/generated/swift");
     create_dir_all(swift_directory.as_path())?;
 
-    generate_uniffi(&ffi_directory.join(FFI_LIBRARY_NAME), &ffi_directory)?;
+    generate_uniffi(&ffi_directory.join(ffi_library_name), &ffi_directory)?;
 
     let module_map_file = ffi_directory.join("module.modulemap");
     if module_map_file.exists() {
@@ -387,16 +402,17 @@ fn build_targets(
     let _env_guard4 =
         watchos_deployment_target.map(|target| sh.push_env("WATCHOS_DEPLOYMENT_TARGET", target));
 
+    let ffi_features = ffi_features();
     if sequentially {
         for target in &targets {
             let triple = target.triple;
 
             println!("-- Building for {}", target.description);
             if target.status == TargetStatus::TopTier {
-                cmd!(sh, "rustup run stable cargo build -p matrix-sdk-ffi --target {triple} --profile {profile} --features {FFI_FEATURES}")
+                cmd!(sh, "rustup run stable cargo build -p matrix-sdk-ffi --target {triple} --profile {profile} --features {ffi_features}")
                     .run()?;
             } else {
-                cmd!(sh, "rustup run nightly cargo build -p matrix-sdk-ffi -Zbuild-std --target {triple} --profile {profile} --features {FFI_FEATURES}")
+                cmd!(sh, "rustup run nightly cargo build -p matrix-sdk-ffi -Zbuild-std --target {triple} --profile {profile} --features {ffi_features}")
                     .run()?;
             }
         }
@@ -410,7 +426,7 @@ fn build_targets(
             for triple in &triples {
                 cmd = cmd.arg("--target").arg(triple);
             }
-            cmd = cmd.arg("--profile").arg(profile).arg("--features").arg(FFI_FEATURES);
+            cmd = cmd.arg("--profile").arg(profile).arg("--features").arg(ffi_features.clone());
 
             println!("-- Building for {} targets", triples.len());
             cmd.run()?;
@@ -422,7 +438,7 @@ fn build_targets(
             for triple in &triples {
                 cmd = cmd.arg("--target").arg(triple);
             }
-            cmd = cmd.arg("--profile").arg(profile).arg("--features").arg(FFI_FEATURES);
+            cmd = cmd.arg("--profile").arg(profile).arg("--features").arg(ffi_features);
 
             println!("-- Building for {} targets with nightly -Zbuild-std", triples.len());
             cmd.run()?;
@@ -446,7 +462,10 @@ fn build_path_for_target(target: &Target, profile: &str) -> Result<Utf8PathBuf> 
     // The builtin dev profile has its files stored under target/debug, all
     // other targets have matching directory names
     let profile_dir_name = if profile == "dev" { "debug" } else { profile };
-    Ok(workspace::target_path()?.join(target.triple).join(profile_dir_name).join(FFI_LIBRARY_NAME))
+    Ok(workspace::target_path()?
+        .join(target.triple)
+        .join(profile_dir_name)
+        .join(ffi_library_name()))
 }
 
 /// Lipo's together the libraries for each platform into a single library.
@@ -467,7 +486,7 @@ fn lipo_platform_libraries(
         let output_folder = generated_dir.join("lipo").join(platform.lib_folder_name());
         create_dir_all(&output_folder)?;
 
-        let output_path = output_folder.join(FFI_LIBRARY_NAME);
+        let output_path = output_folder.join(ffi_library_name());
         let mut cmd = cmd!(sh, "lipo -create");
         for path in paths {
             cmd = cmd.arg(path);

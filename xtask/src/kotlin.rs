@@ -8,23 +8,33 @@ use xshell::cmd;
 use crate::{Result, sh, workspace};
 
 struct PackageValues {
-    name: &'static str,
-    features: &'static str,
+    name: String,
+    features: String,
 }
 
 #[derive(ValueEnum, Clone)]
-enum PackagePreset {
+enum Package {
     CryptoSDK,
     FullSDK,
 }
 
-impl PackagePreset {
+impl Package {
     fn values(self) -> PackageValues {
         match self {
-            PackagePreset::CryptoSDK => {
-                PackageValues { name: "matrix-sdk-crypto-ffi", features: "" }
+            Package::CryptoSDK => PackageValues {
+                name: "matrix-sdk-crypto-ffi".to_string(),
+                features: "".to_string(),
+            },
+            Package::FullSDK => {
+                let metadata = workspace::xtask_metadata()
+                    .expect("Failed to read workspace.metadata.xtask in Cargo.toml");
+                PackageValues {
+                    name: metadata.ffi_crate.unwrap_or_else(|| "matrix-sdk-ffi".to_string()),
+                    features: metadata.kotlin_features.unwrap_or_else(|| {
+                        "sentry,experimental-x509-identity-verification".to_string()
+                    }),
+                }
             }
-            PackagePreset::FullSDK => PackageValues { name: "matrix-sdk-ffi", features: "sentry" },
         }
     }
 }
@@ -41,15 +51,7 @@ enum KotlinCommand {
     BuildAndroidLibrary {
         #[clap(value_enum, long)]
         /// One of the selected presets
-        preset: Option<PackagePreset>,
-
-        #[clap(long)]
-        /// The package name to build
-        package: Option<String>,
-
-        #[clap(long)]
-        /// The features to enable
-        features: Option<String>,
+        package: Package,
 
         /// Build with the release profile
         #[clap(long)]
@@ -80,21 +82,17 @@ impl KotlinArgs {
                 profile,
                 src_dir,
                 only_target,
-                preset,
                 package,
-                features,
             } => {
                 let profile = profile.as_deref().unwrap_or(if release { "release" } else { "dev" });
-                let (package_name, features) = if let Some(preset) = preset {
-                    let v = preset.values();
-                    (v.name.to_owned(), v.features.to_owned())
-                } else {
-                    (
-                        package.expect("preset or package must be provided"),
-                        features.unwrap_or_default(),
-                    )
-                };
-                build_android_library(profile, only_target, &src_dir, package_name, features)
+                let p_val = package.values();
+                build_android_library(
+                    profile,
+                    only_target,
+                    &src_dir,
+                    p_val.name.to_owned(),
+                    p_val.features.to_owned(),
+                )
             }
         }
     }
